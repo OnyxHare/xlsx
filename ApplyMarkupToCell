@@ -1,0 +1,171 @@
+Option Explicit
+
+' 指定セル 1 個に対してマークアップを評価して書式を反映
+Public Sub ApplyMarkupToCell(ByVal c As Range)
+    Dim src As String
+    src = CStr(c.Value)
+    
+    Dim maxLen As Long
+    maxLen = Len(src)
+    If maxLen = 0 Then Exit Sub
+    
+    ' 出力側の各文字の書式情報（最大でも元文字列長ぶん確保）
+    Dim charColor() As Long
+    Dim charStrike() As Boolean
+    ReDim charColor(1 To maxLen)
+    ReDim charStrike(1 To maxLen)
+    
+    ' 書式状態のスタック（色＋取り消し線）
+    Dim stateColor() As Long
+    Dim stateStrike() As Boolean
+    ReDim stateColor(1 To 1)
+    ReDim stateStrike(1 To 1)
+    
+    Dim sp As Long
+    sp = 1
+    stateColor(1) = 0          ' 0 = 自動/デフォルト色
+    stateStrike(1) = False     ' 取り消し線なし
+    
+    Dim i As Long, j As Long
+    Dim outText As String
+    Dim outIndex As Long
+    Dim ch As String
+    Dim keyword As String
+    
+    i = 1
+    Do While i <= maxLen
+        ch = Mid$(src, i, 1)
+        
+        If ch = "(" Then
+            ' "(keyword " を探す
+            keyword = ""
+            j = i + 1
+            Do While j <= maxLen
+                ch = Mid$(src, j, 1)
+                If ch = " " Or ch = ")" Then Exit Do
+                keyword = keyword & ch
+                j = j + 1
+            Loop
+            
+            ' "(keyword " の形になっていればマークアップとみなす
+            If j <= maxLen And Mid$(src, j, 1) = " " And keyword <> "" Then
+                ' スタックを 1 段積む（ひとつ前の状態を引き継いだ上で変更）
+                sp = sp + 1
+                ReDim Preserve stateColor(1 To sp)
+                ReDim Preserve stateStrike(1 To sp)
+                
+                stateColor(sp) = stateColor(sp - 1)
+                stateStrike(sp) = stateStrike(sp - 1)
+                
+                Select Case LCase$(keyword)
+                    Case "red"
+                        stateColor(sp) = vbRed
+                    Case "strikethrough"
+                        stateStrike(sp) = True
+                    ' ここに "blue" などを追加すれば拡張可能
+                End Select
+                
+                ' "(keyword " の「)」手前のスペースまで読み飛ばしたので、
+                ' 次は内容の先頭から読む
+                i = j + 1   ' keyword の後ろのスペースの次の文字
+            Else
+                ' マークアップでない "(" は通常文字として出力
+                outIndex = outIndex + 1
+                outText = outText & "("
+                charColor(outIndex) = stateColor(sp)
+                charStrike(outIndex) = stateStrike(sp)
+                i = i + 1
+            End If
+        
+        ElseIf ch = ")" Then
+            ' スタックが 1 より大きければマークアップ終了として pop
+            If sp > 1 Then
+                sp = sp - 1
+                i = i + 1
+            Else
+                ' 通常の ")" として出力
+                outIndex = outIndex + 1
+                outText = outText & ")"
+                charColor(outIndex) = stateColor(sp)
+                charStrike(outIndex) = stateStrike(sp)
+                i = i + 1
+            End If
+        
+        Else
+            ' 通常文字
+            outIndex = outIndex + 1
+            outText = outText & ch
+            charColor(outIndex) = stateColor(sp)
+            charStrike(outIndex) = stateStrike(sp)
+            i = i + 1
+        End If
+    Loop
+    
+    If outIndex = 0 Then
+        c.Value = ""
+        Exit Sub
+    End If
+    
+    ' まず生文字列だけ反映
+    c.Value = outText
+    ' 全体を初期状態に
+    c.Font.ColorIndex = xlColorIndexAutomatic
+    c.Font.Strikethrough = False
+    
+    ' 同じ書式が連続する部分ごとに Characters に書式設定
+    Dim startPos As Long
+    Dim segLen As Long
+    Dim curColor As Long
+    Dim curStrike As Boolean
+    
+    startPos = 1
+    curColor = charColor(1)
+    curStrike = charStrike(1)
+    
+    For i = 2 To outIndex + 1
+        If i <= outIndex Then
+            If charColor(i) = curColor And charStrike(i) = curStrike Then
+                ' 同一書式が続いている
+            Else
+                ' ここまでを 1 セグメントとして書式を適用
+                segLen = i - startPos
+                With c.Characters(startPos, segLen).Font
+                    .Strikethrough = curStrike
+                    If curColor <> 0 Then
+                        .Color = curColor
+                    Else
+                        .ColorIndex = xlColorIndexAutomatic
+                    End If
+                End With
+                ' 次のセグメント開始
+                startPos = i
+                curColor = charColor(i)
+                curStrike = charStrike(i)
+            End If
+        Else
+            ' 最終セグメントを書式設定
+            segLen = i - startPos
+            With c.Characters(startPos, segLen).Font
+                .Strikethrough = curStrike
+                If curColor <> 0 Then
+                    .Color = curColor
+                Else
+                    .ColorIndex = xlColorIndexAutomatic
+                End If
+            End With
+        End If
+    Next i
+End Sub
+
+' 使用例：A1 のマークアップを評価
+Public Sub Sample()
+    ApplyMarkupToCell Range("A1")
+End Sub
+
+' 選択範囲のすべてのセルに適用する例
+Public Sub ApplyMarkupToSelection()
+    Dim c As Range
+    For Each c In Selection
+        ApplyMarkupToCell c
+    Next c
+End Sub
